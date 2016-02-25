@@ -8,8 +8,9 @@ from random import SystemRandom
 from time import time as time_time
 import urlparse, urllib
 import platform
-import SimpleHTTPServer
+import BaseHTTPServer
 import SocketServer
+import threading
 
 logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
 #############################################################
@@ -38,27 +39,29 @@ class BoolArg(argparse.Action):
         elif values.lower() == 'false': v = False
         setattr(namespace, self.dest, v)
 
-class HttpHandler(SimpleHTTPServer):
-    def init(self, root):
-        self.root = root
-    def do_GET(self):
-        self.send_response(200)
-        if self.path == '/status':
-            self.statusHandler()
-        elif self.path == '/ls':
-            self.lsHandler()
-        elif self.path == '/peers':
-            self.peersHandler()
-        elif self.path == '/trackers':
-            self.trackersHandler()
-        elif self.path.startwith('/get/'):
-            self.getHandler()
-        elif self.path == '/shutdown':
-            self.root.forceShutdown = True
-            self.end_headers()
-            self.wfile.write('OK')
-        elif self.path.startwith('/files/'):
-            self.filesHandler()
+def HttpHandlerFactory(root_obj):
+    class HttpHandler(BaseHTTPServer.BaseHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super(HttpHandler, self).__init__(*args, **kwargs)
+            self.root = root_obj
+        def do_GET(self):
+            self.send_response(200)
+            if self.path == '/status':
+                self.statusHandler()
+            elif self.path == '/ls':
+                self.lsHandler()
+            elif self.path == '/peers':
+                self.peersHandler()
+            elif self.path == '/trackers':
+                self.trackersHandler()
+            elif self.path.startwith('/get/'):
+                self.getHandler()
+            elif self.path == '/shutdown':
+                self.root.forceShutdown = True
+                self.end_headers()
+                self.wfile.write('OK')
+            elif self.path.startwith('/files/'):
+                self.filesHandler()
 
 class Pyrrent2http(object):
     def parseFlags(self):
@@ -172,13 +175,17 @@ class Pyrrent2http(object):
     
     def startHTTP(self):
         logging.info('Starting HTTP Server...')
-        handler = HttpHandler()
-        handler.root = self
+        handler = HttpHandlerFactory(self)
         # if config.idleTimeout > 0 {
         #     connTrackChannel := make(chan int, 10)
         #     handler = NewConnectionCounterHandler(connTrackChannel, mux)
         #     go inactiveAutoShutdown(connTrackChannel)
         # }
+        logging.info('Listening HTTP on %s...\n', self.config.bindAddress)
+        s = BaseHTTPServer.HTTPServer(tuple(self.config.bindAddress.split(':')), handler)
+        # FIXME возможно, надо будет обрабатывать запросы в общем цикле.
+        self.httpListener = threading.Thread(target = server.serve_forever)
+        self.httpListener.start()
     
     def startServices(self):
         if self.config.enableDHT:
