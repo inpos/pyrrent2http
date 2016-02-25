@@ -55,6 +55,10 @@ class HttpHandler(SimpleHTTPServer):
             self.getHandler()
         elif self.path == '/shutdown':
             self.root.forceShutdown = True
+            self.end_headers()
+            self.wfile.write('OK')
+        elif self.path.startwith('/files/'):
+            self.filesHandler()
 
 class Pyrrent2http(object):
     def parseFlags(self):
@@ -168,7 +172,13 @@ class Pyrrent2http(object):
     
     def startHTTP(self):
         logging.info('Starting HTTP Server...')
-        
+        handler = HttpHandler()
+        handler.root = self
+        # if config.idleTimeout > 0 {
+        #     connTrackChannel := make(chan int, 10)
+        #     handler = NewConnectionCounterHandler(connTrackChannel, mux)
+        #     go inactiveAutoShutdown(connTrackChannel)
+        # }
     
     def startServices(self):
         if self.config.enableDHT:
