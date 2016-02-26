@@ -88,6 +88,57 @@ def HttpHandlerFactory(root_obj):
                          }
             output = json.dumps(status)
             self.wfile.write(output)
+        def lsHandler(self):
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            retFiles = list()
+            torrentHandle = self.root.torrentHandle
+            torrent_info = torrentHandle.get_torrent_info()
+            if torrentHandle.is_valid():
+                files = torrent_info.files()
+                for n, file_ in enumerate(files):
+                    Name = file.path
+                    Size = file.size
+                    Offset = file.offset
+                    Download = torrentHandle.file_progress()[n]
+                    Progress = Download / Size
+                    SavePath = os.path.join(os.path.abspath(self.root.config.downloadPath), Name)
+                    Url = 'http://' + self.root.config.bindAddress + '/files/' + Name
+                    
+                    fi = {
+                          'Name':       Name,
+                          'Size':       Size,
+                          'Offset':     Offset,
+                          'Download':   Download,
+                          'Progress':   Progress,
+                          'SavePath':   SavePath,
+                          'Url':        Url
+                          }
+                    retFiles.append(fi)
+            output = json.dumps(retFiles)
+            self.wfile.write(output)
+        def peersHandler(self):
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            torrentHandle = self.root.torrentHandle
+            ret = list()
+            for peer in torrentHandle.get_peer_info():
+                if peer.flags & peer.connecting or peer.flags & peer.handshake:
+                    continue
+                pi = {
+                       'Ip':            peer.ip,
+                       'Flags':         peer.flags,
+                       'Source':        peer.ip,            # ???
+                       'UpSpeed':       peer.up_speed/1024,
+                       'DownSpeed':     peer.down_speed/1024,
+                       'TotalDownload': peer.total_download,
+                       'TotalUpload':   peer.total_upload,
+                       'Country':       peer.ip,  # ???
+                       'Client':        peer.client
+                       }
+                ret.append(pi)
+            output = json.dumps(ret)
+            self.wfile.write(output)
 
 class Pyrrent2http(object):
     def parseFlags(self):
