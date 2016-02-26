@@ -62,6 +62,32 @@ def HttpHandlerFactory(root_obj):
                 self.wfile.write('OK')
             elif self.path.startwith('/files/'):
                 self.filesHandler()
+            else:
+                self.end_headers()
+                self.wfile.write('NONE')
+
+        def statusHandler(self):
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            torrentHandle = self.root.torrentHandle
+            tstatus = torrentHandle.status()
+            status = {
+                         'Name'           :   torrentHandle.name(),
+                         'State'          :   int(tstatus.state),
+                         'StateStr'       :   str(tstatus.state),
+                         'Error'          :   tstatus.error,
+                         'Progress'       :   tstatus.progress,
+                         'DownloadRate'   :   tstatus.download_rate,
+                         'UploadRate'     :   tstatus.upload_rate,
+                         'TotalDownload'  :   tstatus.total_download,
+                         'TotalUpload'    :   tstatus.total_upload,
+                         'NumPeers'       :   tstatus.num_peers,
+                         'NumSeeds'       :   tstatus.num_seeds,
+                         'TotalSeeds'     :   tstatus.num_complete,
+                         'TotalPeers'     :   tstatus.num_incomplete
+                         }
+            output = json.dumps(status)
+            self.wfile.write(output)
 
 class Pyrrent2http(object):
     def parseFlags(self):
@@ -159,19 +185,18 @@ class Pyrrent2http(object):
     def addTorrent(self):
         torrentParams = self.buildTorrentParams(self.config.uri)
         logging.info('Adding torrent')
-        torrentHandle = self.session.add_torrent(torrentParams)
+        self.torrentHandle = self.session.add_torrent(torrentParams)
         if self.config.trackers != '':
             trackers    = self.config.trackers.split(',')
             startTier   = 256 - len(trackers)
             for n in range(len(trackers)):
                 tracker = trackers[n].strip()
                 logging.info('Adding tracker: %s', tracker)
-                torrentHandle.add_tracker(tracker, startTier + n)
+                self.torrentHandle.add_tracker(tracker, startTier + n)
         if self.config.enableScrape:
             logging.info('Sending scrape request to tracker')
-            torrentHandle.scrape_tracker()
+            self.torrentHandle.scrape_tracker()
         logging.info('Downloading torrent: %s', torrentHandle.get_torrent_info().name())
-        torrentFS = TorrentFS(torrentHandle, self.config.fileIndex)
     
     def startHTTP(self):
         logging.info('Starting HTTP Server...')
