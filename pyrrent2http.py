@@ -38,6 +38,9 @@ class BoolArg(argparse.Action):
         elif values.lower() == 'true': v = True
         elif values.lower() == 'false': v = False
         setattr(namespace, self.dest, v)
+        
+class ThreadingHTTPServer(SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer):
+    pass
 
 def HttpHandlerFactory(root_obj):
     class HttpHandler(BaseHTTPServer.BaseHTTPRequestHandler):
@@ -258,7 +261,7 @@ class Pyrrent2http(object):
         #     go inactiveAutoShutdown(connTrackChannel)
         # }
         logging.info('Listening HTTP on %s...\n', self.config.bindAddress)
-        s = BaseHTTPServer.HTTPServer(tuple(self.config.bindAddress.split(':')), handler)
+        s = ThreadingHTTPServer(tuple(self.config.bindAddress.split(':')), handler)
         # FIXME возможно, надо будет обрабатывать запросы в общем цикле.
         self.httpListener = threading.Thread(target = server.serve_forever)
         self.httpListener.start()
