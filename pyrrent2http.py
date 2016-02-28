@@ -48,7 +48,6 @@ def HttpHandlerFactory(root_obj):
             super(HttpHandler, self).__init__(*args, **kwargs)
             self.root = root_obj
         def do_GET(self):
-            self.send_response(200)
             if self.path == '/status':
                 self.statusHandler()
             elif self.path == '/ls':
@@ -66,10 +65,11 @@ def HttpHandlerFactory(root_obj):
             elif self.path.startwith('/files/'):
                 self.filesHandler()
             else:
+                self.send_error(404, 'Not found')
                 self.end_headers()
-                self.wfile.write('NONE')
 
         def statusHandler(self):
+            self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()
             torrentHandle = self.root.torrentHandle
@@ -92,6 +92,7 @@ def HttpHandlerFactory(root_obj):
             output = json.dumps(status)
             self.wfile.write(output)
         def lsHandler(self):
+            self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()
             retFiles = list()
@@ -121,6 +122,7 @@ def HttpHandlerFactory(root_obj):
             output = json.dumps(retFiles)
             self.wfile.write(output)
         def peersHandler(self):
+            self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()
             torrentHandle = self.root.torrentHandle
@@ -131,14 +133,39 @@ def HttpHandlerFactory(root_obj):
                 pi = {
                        'Ip':            peer.ip,
                        'Flags':         peer.flags,
-                       'Source':        peer.ip,            # ???
+                       'Source':        peer.source,
                        'UpSpeed':       peer.up_speed/1024,
                        'DownSpeed':     peer.down_speed/1024,
                        'TotalDownload': peer.total_download,
                        'TotalUpload':   peer.total_upload,
-                       'Country':       peer.ip,  # ???
+                       'Country':       peer.country,
                        'Client':        peer.client
                        }
+                ret.append(pi)
+            output = json.dumps(ret)
+            self.wfile.write(output)
+        def trackersHandler(self):
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            ret = list()
+            for tracker in self.root.torrentHandler.get_torrent_info().trackers():
+                pi = {
+                        'Url':                tracker.url,
+                        'NextAnnounceIn':        self.root.torrentHandler.status().next_announce.seconds,
+                        'MinAnnounceIn':        10, # FIXME неясно, откуда брать
+                        'ErrorCode':            0, #FIXME неясно, откуда брать
+                        'ErrorMessage':        u'', #FIXME неясно, откуда брать
+                        'Message':            u'', #FIXME неясно, откуда брать
+                        'Tier':                tracker.tier,
+                        'FailLimit':            tracker.fail_limit,
+                        'Fails':                tracker.fails,
+                        'Source':                tracker.source,
+                        'Verified':            tracker.verified,
+                        'Updating':            tracker.updating,
+                        'StartSent':            tracker.start_sent,
+                        'CompleteSent':        tracker.complete_sent,
+                        }
                 ret.append(pi)
             output = json.dumps(ret)
             self.wfile.write(output)
