@@ -5,20 +5,75 @@ import libtorrent as lt
 import logging
 import sys, os
 from random import SystemRandom
-from time import time as time_time
+import time
 import urlparse, urllib
 import platform
 import BaseHTTPServer
 import SocketServer
 import threading
+import signal
 
 logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
 #############################################################
 
+class Ticker(object):
+    def __init__(self, interval):
+        self.tick = False
+        self._timer     = None
+        self.interval   = interval
+        self.is_running = False
+        self.start()
+
+    def true(self):
+        if self.tick:
+            self.tick = False
+            return True
+        else:
+            return False
+
+    def _run(self):
+        self.is_running = False
+        self.start()
+        self.tick = True
+
+    def start(self):
+        if not self.is_running:
+            self._timer = threading.Timer(self.interval, self._run)
+            self._timer.start()
+            self.is_running = True
+
+    def stop(self):
+        self._timer.cancel()
+        self.is_running = False
+
 class TorrentFS(object):
     def __init__(self, handle, startIndex):
         self.tfs = AttributeDict()
-        
+        self.tfs.handle = handle
+        self.tfs.priorities = []
+        self.waitForMetadata()
+        if startIndex < 0:
+            logging.info('No -file-index specified, downloading will be paused until any file is requested')
+        for i in range(self.TorrentInfo().num_files()):
+            if startIndex == i:
+                self.setPriority(i, 1)
+            else:
+                self.setPriority(i, 0)
+
+    def waitForMetadata(self):
+        if not self.tfs.handle.status().has_metadata:
+            time.sleep(0.1)
+    def TorrentInfo(self):
+        while not isinstance(self.info, lt.torrent_info):
+            time.sleep(0.1)
+        return self.tfs.info
+    def setPriority(self, index, priority):
+        if self.tfs.priorities[index] != priority:
+            logging.info('Setting %s priority to %d', self.tfs.info.file_at(0).path, priority)
+            self.tfs.priorities[index] = priority
+            self.tfs.handle.file_priority(index, priority)
+    def LoadFileProgress(self):
+        tfs.progresses = tfs.handle.file_progress()
 
 #############################################################
 
@@ -171,6 +226,7 @@ def HttpHandlerFactory(root_obj):
             self.wfile.write(output)
 
 class Pyrrent2http(object):
+    forceShutdown = False
     def parseFlags(self):
         parser = argparse.ArgumentParser(add_help=True, version=VERSION)
         parser.add_argument('--uri', type=str, default='', help='Magnet URI or .torrent file URL', dest='uri')
@@ -278,6 +334,7 @@ class Pyrrent2http(object):
             logging.info('Sending scrape request to tracker')
             self.torrentHandle.scrape_tracker()
         logging.info('Downloading torrent: %s', torrentHandle.get_torrent_info().name())
+        self.TorrentFS = TorrentFS(self.torrentHandle, self.config.fileIndex)
     
     def startHTTP(self):
         logging.info('Starting HTTP Server...')
@@ -288,10 +345,9 @@ class Pyrrent2http(object):
         #     go inactiveAutoShutdown(connTrackChannel)
         # }
         logging.info('Listening HTTP on %s...\n', self.config.bindAddress)
-        s = ThreadingHTTPServer(tuple(self.config.bindAddress.split(':')), handler)
-        # FIXME возможно, надо будет обрабатывать запросы в общем цикле.
-        self.httpListener = threading.Thread(target = server.serve_forever)
-        self.httpListener.start()
+        self.httpListener = ThreadingHTTPServer(tuple(self.config.bindAddress.split(':')), handler)
+        thread = threading.Thread(target = self.httpListener.serve_forever)
+        thread.start()
     
     def startServices(self):
         if self.config.enableDHT:
@@ -346,7 +402,7 @@ class Pyrrent2http(object):
             else:
                 self.session.load_state(lt.bdecode(bytes__))
         
-        rand = SystemRandom(time_time())
+        rand = SystemRandom(time.time())
         portLower = self.config.listenPort
         if self.config.randomPort:
             portLower = rand.randint(0, 16374) + 49151
@@ -395,6 +451,38 @@ class Pyrrent2http(object):
         encryptionSettings.allowed_enc_level = lt.enc_level.both
         encryptionSettings.prefer_rc4 = True
         self.session.set_pe_settings(encryptionSettings)
+        
+    def consumeAlerts(self):
+        alerts = self.session.pop_alerts()
+        for alert in alerts:
+            if isinstance(alert, lt.save_resume_data_alert):
+                self.processSaveResumeDataAlert(alert)
+    
+    def loop(self):
+        def sigterm_handler(_signo, _stack_frame):
+            self.forceShutdown = True
+        signal.signal(signal.SIGTERM, sigterm_handler)
+        statsTicker = RepeatedTimer(30)
+        saveResumeDataTicker = RepeatedTimer(5)
+        time_start = time.time()
+        while True:
+            if self.forceShutdown:
+                self.httpListener.shutdown()
+                return
+            if time.time() - time_start > 0.5:
+                self.consumeAlerts()
+                self.torrentFS.LoadFileProgress()
+                state = self.torrentHandle.status().state
+                if self.config.exitOnFinish and (state == state.finished or state == state.seeding):
+                    self.forceShutdown = True
+                if os.getppid() == 1:
+                    self.forceShutdown = True
+                time_start = time.time()
+            if statsTicker.true:
+                self.stats()
+            if saveResumeDataTicker.true:
+                self.saveResumeData(True)
+
     
 if __name__ == '__main__':
     pyrrent2http = Pyrrent2http()
@@ -405,5 +493,5 @@ if __name__ == '__main__':
     pyrrent2http.addTorrent()
 
     pyrrent2http.startHTTP()
-    loop()
-    shutdown()
+    pyrrent.loop()
+#    shutdown()
