@@ -12,9 +12,13 @@ import BaseHTTPServer
 import SocketServer
 import threading
 import signal
+import io
 
 logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
-#############################################################
+######################################################################################
+VERSION = "0.0.1"
+USER_AGENT = "pyrrent2http/" + VERSION + " libtorrent/" + lt.version
+######################################################################################
 
 class Ticker(object):
     def __init__(self, interval):
@@ -46,17 +50,159 @@ class Ticker(object):
         self._timer.cancel()
         self.is_running = False
 
+#######################################################################################
+
+class TorrentFile(object):
+    tfs         =   None
+    num         =   int()
+    closed      =   False
+    savePath    =   str()
+    fileEntry   =   None
+    index       =   int()
+    filePtr     =   None
+    downloaded  =   int()
+    progress    =   float()
+    def __init__(self, tfs, fileEntry, savePath, index):
+        self.tfs = tfs
+        self.fileEntry = fileEntry
+        self.savePath = savePath
+        self.index = index
+    def SavePath(self):
+        return self.savePath
+    def Index(self):
+        return tf.index
+    def Downloaded(self):
+        return self.downloaded
+    def Progress(self):
+        return self.progress
+    def FilePtr(self):
+        if self.closed:
+            return None
+        if self.filePtr is None:
+            while not os.path.exists(self.savePath):
+                time.sleep(0.1)
+            self.filePtr = io.open(self.savePath, 'rb')
+        return self.filePtr
+    def log(self, message):
+        fnum = self.num
+        logging.info("[%d] %s\n" % (fnum, message))
+    def Pieces(self):
+        startPiece, _ = self.pieceFromOffset(1)
+        endPiece, _ = self.pieceFromOffset(self.Size() - 1)
+        return startPiece, endPiece
+    def SetPriority(self, priority):
+        self.tfs.setPriority(self.index, priority)
+    def Stat(self):
+        return self
+    def readOffset(self):
+        return self.filePtr.seek(0, os.SEEK_CUR)
+    def havePiece(self, piece):
+        return self.tfs.handle.have_piece(piece)
+    def pieceLength(self):
+        return self.tfs.info.piece_length()
+    def pieceFromOffset(self, offset):
+        pieceLength = int(self.pieceLength())
+        piece = int((self.Offset() + offset) / pieceLength)
+        pieceOffset = int((self.Offset() + offset) % pieceLength)
+        return piece, pieceOffset
+    def Offset(self):
+        return self.fileEntry.offset
+    def waitForPiece(self, piece):
+        if not self.havePiece(piece):
+            self.log('Waiting for piece %d' % (piece,))
+            self.tfs.handle.set_piece_deadline(piece, 50)
+        while not self.havePiece(piece):
+            if self.tfs.handle.piece_priority(piece) == 0 or self.closed:
+                return None
+            time.sleep(0.1)
+        _, endPiece = self.Pieces()
+        if piece < endPiece and not self.havePiece(piece + 1):
+            self.tfs.handle.set_piece_deadline(piece + 1, 100)
+        return None
+    def Close(self):
+        if self.closed: return
+        self.log('Closing %s...' % (self.Name(),))
+        self.tfs.removeOpenedFile(self)
+        self.closed = True
+        if self.filePtr is not None:
+            err = self.filePtr.close()
+        return err
+    def ShowPieces(self):
+        pieces = self.tfs.handle.status().pieces
+        startPiece, endPiece = self.Pieces()
+        str_ = ''
+        for i in range(startPiece, endPiece + 1):
+            if pieces[i] == False:
+                str_ += "-"
+            else:
+                str_ += "#"
+        self.log(str_)
+    def Read(self, buf):
+        filePtr = self.FilePtr()
+        if filePtr is None:
+            return 0
+        toRead = len(buf)
+        if toRead > self.pieceLength():
+            toRead = self.pieceLength()
+        readOffset = self.readOffset()
+        startPiece, _ = self.pieceFromOffset(readOffset)
+        endPiece, _ = self.pieceFromOffset(readOffset + toRead)
+        for i in range(startPiece,  endPiece + 1):
+            if self.waitForPiece(i) is None:
+                return 0
+        read = filePtr.readinto(buf)
+        return read
+    def Seek(self, offset, whence):
+        filePtr = self.FilePtr()
+        if filePtr is None: return
+        if whence == os.SEEK_END:
+            offset = self.Size() - offset
+            whence = os.SEEK_SET
+        newOffset = filePtr.seek(offset, whence)
+        self.log('Seeking to %d/%d' % (newOffset, self.Size()))
+        return newOffset
+    def Name(self):
+        return self.fileEntry.path
+    def Size(self):
+        return self.fileEntry.size
+    def IsComplete(self):
+        return self.downloaded == self.Size()
+
+#######################################################################################
+
+class TorrentDir(object):
+    tfs = None
+    entriesRead = int()
+    def __init__(self, tfs):
+        self.tfs = tfs
+    def Readdir(self, count):
+        info = self.tfs.TorrentInfo()
+        totalFiles = info.num_files()
+        read = self.entriesRead
+        toRead = totalFiles - read
+        if count >= 0 and count < toRead:
+            toRead = count
+        files = [None for x in range(toRead)]
+        for i in range(toRead):
+            files[i] = self.tfs.FileAt(read)
+            read += 1
+        return files
+        
+
+#######################################################################################
+
 class TorrentFS(object):
     handle      =       None
     info        =       None
-    priorities  =       []
-    openedFiles =       []
+    priorities  =       list()
+    openedFiles =       list()
     lastOpenedFile =    None
     shuttingDown   =    False
     fileCounter =       int()
-    progresses  =       []
+    progresses  =       list()
 
-    def __init__(self, handle, startIndex):
+    def __init__(self, root, handle, startIndex):
+        self.root = root
         self.handle = handle
         self.waitForMetadata()
         if startIndex < 0:
@@ -67,21 +213,110 @@ class TorrentFS(object):
             else:
                 self.setPriority(i, 0)
 
-    def waitForMetadata(self):
-        if not self.handle.status().has_metadata:
-            time.sleep(0.1)
-    def TorrentInfo(self):
-        while not isinstance(self.info, lt.torrent_info):
-            time.sleep(0.1)
-        return self.info
+    def Shutdown(self):
+        self.shuttingDown = True
+        if len(self.openedFiles) > 0:
+            logging.info('Closing %d opened file(s)' % (len(self.openedFiles),))
+            for f in self.openedFiles:
+                f.Close()
+    def LastOpenedFile(self):
+        return self.LastOpenedFile  
+    def addOpenedFile(self, file):
+        self.openedFiles.append(file)    
     def setPriority(self, index, priority):
         if self.priorities[index] != priority:
             logging.info('Setting %s priority to %d', self.info.file_at(0).path, priority)
             self.priorities[index] = priority
             self.handle.file_priority(index, priority)
+    def findOpenedFile(self, file):
+        for i, f in enumerate(self.openedFiles):
+            if f == file:
+                return i
+        return -1
+    def removeOpenedFile(self, file):
+        pos = self.findOpenedFile(file)
+        if pos >= 0:
+            del self.openedFiles[pos]
+    def waitForMetadata(self):
+        if not self.handle.status().has_metadata:
+            time.sleep(0.1)
+    def HasTorrentInfo(self):
+        return self.info is not None
+    def TorrentInfo(self):
+        while not isinstance(self.info, lt.torrent_info):
+            time.sleep(0.1)
+        return self.info
     def LoadFileProgress(self):
         self.progresses = self.handle.file_progress()
-
+    def getFileDownloadedBytes(self, i):
+        try:
+            bytes = self.progresses[i]
+        except IndexError:
+            bytes = 0
+        return bytes
+    def Files(self):
+        info = self.TorrentInfo()
+        files = [None for x in range(info.num_files())]
+        for i in range(info.num_files()):
+            file = self.FileAt(i)
+            file.downloaded = self.getFileDownloadedBytes(i)
+            if file.Size() > 0:
+                file.progress = float(file.downloaded)/float(file.Size())
+            files[i] = file
+        return files
+    def SavePath(self):
+        return self.root.torrentParams['save_path']
+    def FileAt(self, index):
+        info = self.TorrentInfo()
+        if index < 0 or index >= info.num_files():
+            raise IndexError
+        fileEntry = info.file_at(index)
+        path = os.path.abspath(os.path.join(self.SavePath(), fileEntry.path))
+        return TorrentFile(
+                           self,
+                           fileEntry,
+                           path,
+                           index
+                           )
+    def FileByName(self, name):
+        savePath = os.path.abspath(os.path.join(self.SavePath(), name))
+        for file in self.Files():
+            if file.SavePath() == savePath:
+                return file
+        raise IOError
+    def Open(self, name):
+        if self.shuttingDown or not self.HasTorrentInfo():
+            raise IOError
+        if name == '/':
+            return TorrentDir(self)
+        return self.OpenFile(name)
+    def checkPriorities(self):
+        for index, priority in enumerate(self.priorities):
+            if priority == 0:
+                continue
+            found = False
+            for f in self.openedFiles:
+                if f.index == index:
+                    found = True
+                    break
+            if not found:
+                self.setPriority(index, 0)
+    def OpenFile(self, name):
+        try:
+            tf = FileByName(name)
+        except IOError:
+            return
+        self.fileCounter += 1
+        tf.num = self.fileCounter
+        tf.log('Opening %s...' % (tf.Name(),))
+        tf.SetPriority(1)
+        startPiece, _ = tf.Pieces()
+        self.handle.set_piece_deadline(startPiece, 50)
+        self.lastOpenedFile = tf
+        self.addOpenedFile(tf)
+        self.checkPriorities()
+        return tf
+        
 #############################################################
 
 class AttributeDict(dict):
@@ -89,9 +324,6 @@ class AttributeDict(dict):
         return self[attr]
     def __setattr__(self, attr, value):
         self[attr] = value
-
-VERSION = "0.0.1"
-USER_AGENT = "pyrrent2http/"+VERSION+" libtorrent/"+lt.version
 
 class BoolArg(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
@@ -118,8 +350,8 @@ def HttpHandlerFactory(root_obj):
                 self.peersHandler()
             elif self.path == '/trackers':
                 self.trackersHandler()
-            elif self.path.startwith('/get/'):
-                self.getHandler()
+            #elif self.path.startwith('/get/'):   # Неясно, зачем 
+            #    self.getHandler()                # этот запрос?
             elif self.path == '/shutdown':
                 self.root.forceShutdown = True
                 self.end_headers()
@@ -158,26 +390,17 @@ def HttpHandlerFactory(root_obj):
             self.send_header("Content-type", "application/json")
             self.end_headers()
             retFiles = list()
-            torrentHandle = self.root.torrentHandle
-            torrent_info = torrentHandle.get_torrent_info()
-            if torrentHandle.is_valid():
-                files = torrent_info.files()
-                for n, file_ in enumerate(files):
-                    Name = file.path
-                    Size = file.size
-                    Offset = file.offset
-                    Download = torrentHandle.file_progress()[n]
-                    Progress = Download / Size
-                    SavePath = os.path.join(os.path.abspath(self.root.config.downloadPath), Name)
-                    Url = 'http://' + self.root.config.bindAddress + '/files/' + Name
-                    
+            if self.root.torrentFS.HasTorrentInfo():
+                files = self.root.torrentFS.Files()
+                for file_ in files:
+                    Url = 'http://' + self.root.config.bindAddress + '/files/' + urllib.quote(file.Name())
                     fi = {
-                          'Name':       Name,
-                          'Size':       Size,
-                          'Offset':     Offset,
-                          'Download':   Download,
-                          'Progress':   Progress,
-                          'SavePath':   SavePath,
+                          'Name':       file.Name(),
+                          'Size':       file.Size(),
+                          'Offset':     file.Offset(),
+                          'Download':   file.Downloaded(),
+                          'Progress':   file.Progress(),
+                          'SavePath':   file.SavePath(),
                           'Url':        Url
                           }
                     retFiles.append(fi)
@@ -330,9 +553,9 @@ class Pyrrent2http(object):
         return torrentParams
     
     def addTorrent(self):
-        torrentParams = self.buildTorrentParams(self.config.uri)
+        self.torrentParams = self.buildTorrentParams(self.config.uri)
         logging.info('Adding torrent')
-        self.torrentHandle = self.session.add_torrent(torrentParams)
+        self.torrentHandle = self.session.add_torrent(self.torrentParams)
         if self.config.trackers != '':
             trackers    = self.config.trackers.split(',')
             startTier   = 256 - len(trackers)
@@ -343,8 +566,8 @@ class Pyrrent2http(object):
         if self.config.enableScrape:
             logging.info('Sending scrape request to tracker')
             self.torrentHandle.scrape_tracker()
-        logging.info('Downloading torrent: %s', torrentHandle.get_torrent_info().name())
-        self.TorrentFS = TorrentFS(self.torrentHandle, self.config.fileIndex)
+        logging.info('Downloading torrent: %s', self.torrentHandle.get_torrent_info().name())
+        self.TorrentFS = TorrentFS(self, self.torrentHandle, self.config.fileIndex)
     
     def startHTTP(self):
         logging.info('Starting HTTP Server...')
@@ -604,9 +827,9 @@ class Pyrrent2http(object):
             self.session.pause()
             self.waitForAlert(lt.torrent_paused_alert, 10)
             if self.torrentHandle is not None:
-                self.saveResumeData(False)      # TODO
-                self.saveSessionState()         # TODO
-                self.removeTorrent()            # TODO
+                self.saveResumeData(False)
+                self.saveSessionState()
+                self.removeTorrent()
             logging.info('Aborting the session')
             del self.session
         logging.info('Bye bye')
