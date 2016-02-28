@@ -363,7 +363,7 @@ def HttpHandlerFactory(root_obj):
                 self.end_headers()
 
         def filesHandler(self):
-            
+            pass
 
         def statusHandler(self):
             self.send_response(200)
@@ -463,7 +463,7 @@ class Pyrrent2http(object):
         self.torrentHandle = None
         self.forceShutdown = False
         self.session = None
-        self.magnet = false
+        self.magnet = False
     def parseFlags(self):
         parser = argparse.ArgumentParser(add_help=True, version=VERSION)
         parser.add_argument('--uri', type=str, default='', help='Magnet URI or .torrent file URL', dest='uri')
