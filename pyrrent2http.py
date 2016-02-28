@@ -47,11 +47,17 @@ class Ticker(object):
         self.is_running = False
 
 class TorrentFS(object):
+    handle      =       None
+    info        =       None
+    priorities  =       []
+    openedFiles =       []
+    lastOpenedFile =    None
+    shuttingDown   =    False
+    fileCounter =       int()
+    progresses  =       []
+
     def __init__(self, handle, startIndex):
-        self.tfs = AttributeDict()
-        self.tfs.handle = handle
-        self.tfs.priorities = []
-        self.tfs.LastOpenedFile = None
+        self.handle = handle
         self.waitForMetadata()
         if startIndex < 0:
             logging.info('No -file-index specified, downloading will be paused until any file is requested')
@@ -62,19 +68,19 @@ class TorrentFS(object):
                 self.setPriority(i, 0)
 
     def waitForMetadata(self):
-        if not self.tfs.handle.status().has_metadata:
+        if not self.handle.status().has_metadata:
             time.sleep(0.1)
     def TorrentInfo(self):
         while not isinstance(self.info, lt.torrent_info):
             time.sleep(0.1)
-        return self.tfs.info
+        return self.info
     def setPriority(self, index, priority):
-        if self.tfs.priorities[index] != priority:
-            logging.info('Setting %s priority to %d', self.tfs.info.file_at(0).path, priority)
-            self.tfs.priorities[index] = priority
-            self.tfs.handle.file_priority(index, priority)
+        if self.priorities[index] != priority:
+            logging.info('Setting %s priority to %d', self.info.file_at(0).path, priority)
+            self.priorities[index] = priority
+            self.handle.file_priority(index, priority)
     def LoadFileProgress(self):
-        tfs.progresses = tfs.handle.file_progress()
+        self.progresses = self.handle.file_progress()
 
 #############################################################
 
@@ -227,7 +233,10 @@ def HttpHandlerFactory(root_obj):
             self.wfile.write(output)
 
 class Pyrrent2http(object):
-    forceShutdown = False
+    def __init__(self):
+        self.torrentHandle = None
+        self.forceShutdown = False
+        self.session = None
     def parseFlags(self):
         parser = argparse.ArgumentParser(add_help=True, version=VERSION)
         parser.add_argument('--uri', type=str, default='', help='Magnet URI or .torrent file URL', dest='uri')
@@ -486,7 +495,16 @@ class Pyrrent2http(object):
         for alert in alerts:
             if isinstance(alert, lt.save_resume_data_alert):
                 self.processSaveResumeDataAlert(alert)
-    
+    def waitForAlert(self, alertClass, timeout):
+        start = time.time()
+        while True:
+            alert = self.session.wait_for_alert(100)
+            if (time.time() - start) > timeout:
+                return None
+            if alert is not None:
+                alert = self.session.pop_alert()
+                if isinstance(alert, alertClass):
+                    return alert
     def loop(self):
         def sigterm_handler(_signo, _stack_frame):
             self.forceShutdown = True
@@ -511,8 +529,89 @@ class Pyrrent2http(object):
                 self.stats()
             if saveResumeDataTicker.true:
                 self.saveResumeData(True)
+    def processSaveResumeDataAlert(self, alert):
+        logging.info('Saving resume data to: %s', config.resumeFile)
+        data = lt.bencode(alert.resume_data)
+        try:
+            with open(self.config.resumeFile, 'wb') as f:
+                f.write(data)
+        except IOError as e:
+            _, strerror = e.args
+            logging.error(strerror)
+    def saveResumeData(self, async = False):
+        if not self.torrentHandle.status().need_save_resume or self.config.resumeFile == '':
+            return False
+        self.torrentHandle.save_resume_data(3)
+        if not async:
+            alert = self.waitForAlert(lt.save_resume_data_alert, 5)
+            if alert == None:
+                return False
+            self.processSaveResumeDataAlert(alert)
+        return True
+    def saveSessionState(self):
+        if self.config.stateFile == '':
+            return
+        entry = self.session.save_state()
+        data = lt.bencode(entry)
+        logging.info('Saving session state to: %s', self.config.stateFile)
+        try:
+            with open(self.config.stateFile, 'wb') as f:
+                f.write(data)
+        except IOError as e:
+            _, strerror = e.args
+            logging.error(strerror)
+    def removeFiles(self, files):
+        for file in files:
+            try:
+                os.remove(file)
+            except Exception as e:
+                _, strerror = e.args
+                logging.error(strerror)
+            else:
+                path = os.path.dirname(file)
+                savePath = os.path.abspath(self.config.downloadPath)
+                savePath = savePath[-1] == os.path.sep and savePath[:-1] or savePath
+                while path != savePath:
+                    os.remove(path)
+                    path_ = os.path.dirname(path)
+                    path = path_[-1] == os.path.sep and path_[:-1] or path_
+    def filesToRemove(self):
+        files = []
+        if self.torrentFS.HasTorrentInfo():
+            for file in self.torrentFS.Files():
+                if (not self.config.keepComplete or not file.IsComplete()) and (not self.config.keepIncomplete or file.IsComplete()):
+                    if os.path.exists(file.SavePath()):
+                        files.append(file.SavePath())
+    def removeTorrent(self):
+        files = []
+        state = self.torrentHandle.status().state
+        if state != state.checking_files and state != state.queued_for_checking and not self.config.keepFiles:
+            if not self.config.keepComplete and not self.config.keepIncomplete:
+                delete_files = True
+            else:
+                delete_files = False
+                files = self.filesToRemove()
+        logging.info('Removing the torrent')
+        self.session.remove_torrent(self.torrentHandle, delete_files = delete_files)
+        if delete_files or len(files) > 0:
+            logging.info('Waiting for files to be removed')
+            self.waitForAlert(lt.torrent_deleted_alert, 15)
+            self.removeFiles(files)
+    def shutdown(self):
+        logging.info('Stopping pyrrent2http...')
+        self.torrentFS.Shutdown()
+        if self.session != None:
+            self.session.pause()
+            self.waitForAlert(lt.torrent_paused_alert, 10)
+            if self.torrentHandle is not None:
+                self.saveResumeData(False)      # TODO
+                self.saveSessionState()         # TODO
+                self.removeTorrent()            # TODO
+            logging.info('Aborting the session')
+            del self.session
+        logging.info('Bye bye')
+        sys.exit(0)
 
-    
 if __name__ == '__main__':
     pyrrent2http = Pyrrent2http()
     pyrrent2http.parseFlags()
@@ -522,5 +621,5 @@ if __name__ == '__main__':
     pyrrent2http.addTorrent()
 
     pyrrent2http.startHTTP()
-    pyrrent.loop()
-#    shutdown()
+    pyrrent2http.loop()
+    pyrrent2http.shutdown()
