@@ -51,6 +51,7 @@ class TorrentFS(object):
         self.tfs = AttributeDict()
         self.tfs.handle = handle
         self.tfs.priorities = []
+        self.tfs.LastOpenedFile = None
         self.waitForMetadata()
         if startIndex < 0:
             logging.info('No -file-index specified, downloading will be paused until any file is requested')
@@ -452,6 +453,34 @@ class Pyrrent2http(object):
         encryptionSettings.prefer_rc4 = True
         self.session.set_pe_settings(encryptionSettings)
         
+    def stats(self):
+        status = self.torrentHandle.status()
+        dhtStatusStr = ''
+        if not status.has_metadata:
+            return
+        if self.config.showAllStats or self.config.showOverallProgress:
+            sessionStatus = self.session.status()
+            if self.session.is_dht_running():
+                dhtStatusStr = ', DHT nodes: %d' % (sessionStatus.dht_nodes,)
+            errorStr = ''
+            if len(status.error) > 0:
+                errorStr = ' (%s)' % (status.error,)
+            logging.info('%s, overall progress: %.2f%%, dl/ul: %.3f/%.3f kbps, peers/seeds: %d/%d' + dhtStatusStr + errorStr % (
+                          str(status.state),
+                          status.progres * 100,
+                          float(status.download_rate)/1024,
+                          float(status.upload_rate)/1024,
+                          status.num_peers,
+                          status.num_seeds
+                          )
+                         )
+            if self.config.showFilesProgress or self.config.showAllStats:
+                str_ = 'Files: '
+                for i, f in enumerate(self.TorrentFS.Files()):
+                    str_ += '[%d] %.2f%% ' % (i, f.Progress()*100)
+                logging.info(str_)
+            if (self.config.showPiecesProgress or self.config.showAllStats) and self.torrentFS.LastOpenedFile() != None:
+                self.torrentFS.LastOpenedFile().ShowPieces()
     def consumeAlerts(self):
         alerts = self.session.pop_alerts()
         for alert in alerts:
