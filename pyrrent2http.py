@@ -362,6 +362,9 @@ def HttpHandlerFactory(root_obj):
                 self.send_error(404, 'Not found')
                 self.end_headers()
 
+        def filesHandler(self):
+            
+
         def statusHandler(self):
             self.send_response(200)
             self.send_header("Content-type", "application/json")
@@ -460,6 +463,7 @@ class Pyrrent2http(object):
         self.torrentHandle = None
         self.forceShutdown = False
         self.session = None
+        self.magnet = false
     def parseFlags(self):
         parser = argparse.ArgumentParser(add_help=True, version=VERSION)
         parser.add_argument('--uri', type=str, default='', help='Magnet URI or .torrent file URL', dest='uri')
@@ -505,6 +509,8 @@ class Pyrrent2http(object):
         if self.config.uri == '':
             parser.print_usage()
             sys.exit(1)
+        if self.config.uri.startswith('magnet:'):
+            self.magnet = True
         if self.config.resumeFile != '' and not self.config.keepFiles:
             logging.error('Usage of option --resume-file is allowed only along with --keep-files')
             sys.exit(1)
@@ -512,8 +518,9 @@ class Pyrrent2http(object):
     def buildTorrentParams(self, uri):
         fileUri = urlparse.urlparse(uri)
         torrentParams = {}
-        
-        if fileUri.scheme == 'file':
+        if self.magnet:
+            torrentParams['url'] =  uri
+        elif fileUri.scheme == 'file':
             uriPath = fileUri.path
             if uriPath != '' and platform.system().lower() == 'windows' and os.path.sep == uriPath[0]:
                 uriPath = uriPath[1:]
@@ -526,6 +533,7 @@ class Pyrrent2http(object):
                 errno, strerror = e.args
                 logging.error(strerror)
                 sys.exit(errno)
+            torrentParams['ti'] = torrent_info
         else:
             logging.info('Will fetch: %s', uri)
             try:
@@ -535,7 +543,7 @@ class Pyrrent2http(object):
                 errno, strerror = e.args
                 logging.error(strerror)
                 sys.exit(errno)
-        torrentParams['ti'] = torrent_info
+            torrentParams['ti'] = torrent_info
         logging.info('Setting save path: %s', self.config.downloadPath)
         torrentParams['save_path'] = self.config.downloadPath
         
@@ -547,7 +555,7 @@ class Pyrrent2http(object):
             except Exception as e:
                 _, strerror = e.args
                 logging.error(strerror)
-        if self.config.noSparseFile:
+        if self.config.noSparseFile or self.magnet:
             logging.info('Disabling sparse file support...')
             torrentParams["storage_mode"] = lt.storage_mode_t.storage_mode_allocate
         return torrentParams
