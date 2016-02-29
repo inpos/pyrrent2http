@@ -1,9 +1,18 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 import argparse
-import libtorrent as lt
-import logging
 import sys, os
+import logging
+try:
+    import libtorrent as lt
+except:
+    try:
+        sys.path.append(os.path.dirname(os.path.realpath(__file__)))
+        import libtorrent as lt
+    except Exception as e:
+        _, strerror = ee.args
+        logging.error(strerror)
+        sys.exit(1)
 from random import SystemRandom
 import time
 import urlparse, urllib
@@ -16,7 +25,7 @@ import io
 
 logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
 ######################################################################################
-VERSION = "0.0.1"
+VERSION = "0.1.0"
 USER_AGENT = "pyrrent2http/" + VERSION + " libtorrent/" + lt.version
 ######################################################################################
 
@@ -125,8 +134,7 @@ class TorrentFile(object):
         self.tfs.removeOpenedFile(self)
         self.closed = True
         if self.filePtr is not None:
-            err = self.filePtr.close()
-        return err
+            self.filePtr.close()
     def ShowPieces(self):
         pieces = self.tfs.handle.status().pieces
         startPiece, endPiece = self.Pieces()
@@ -361,9 +369,64 @@ def HttpHandlerFactory(root_obj):
             else:
                 self.send_error(404, 'Not found')
                 self.end_headers()
-
         def filesHandler(self):
-            pass
+            f, start_range, end_range = self.send_head()
+            #print "Got values of ", start_range, " and ", end_range, "...\n"
+            if not f.closed:
+                f.Seek(start_range, 0)
+                chunk = 1024 * 1024
+                total = 0
+                buf = bytearray(chunk)
+                while chunk > 0:
+                    if start_range + chunk > end_range:
+                        chunk = end_range - start_range
+                        buf = bytearray(chunk)
+                    try:
+                        f.Read(buf)
+                        self.wfile.write(buf)
+                    except:
+                        break
+                    total += chunk
+                    start_range += chunk
+                f.Close()
+        def send_head(self):
+            fname = urllib.unquote(self.path.lstrip('/files/'))
+            try:
+                f =  self.root.TorrentFS.FileByName(fname)
+                _ = f.FilePtr()
+            except IOError:
+                self.send_error(404, "File not found")
+                return (None, 0, 0)
+            ctype = 'application/octet-stream'
+            if "Range" in self.headers:
+                self.send_response(206)
+            else:
+                self.send_response(200)
+            self.send_header("Content-type", ctype)
+            size = f.Size()
+            start_range = 0
+            end_range = size
+            self.send_header("Accept-Ranges", "bytes")
+            if "Range" in self.headers:
+                s, e = self.headers['range'][6:].split('-', 1)
+                sl = len(s)
+                el = len(e)
+                if sl > 0:
+                    start_range = int(s)
+                    if el > 0:
+                        end_range = int(e) + 1
+                elif el > 0:
+                    ei = int(e)
+                    if ei < size:
+                        start_range = size - ei
+            self.send_header("Content-Range", 'bytes ' + str(start_range) + '-' + str(end_range - 1) + '/' + str(size))
+            self.send_header("Content-Length", end_range - start_range)
+            self.send_header("Last-Modified", self.date_time_string(f.fileEntry.mtime))
+            self.end_headers()
+            #print "Sending Bytes ",start_range, " to ", end_range, "...\n"
+            return (f, start_range, end_range)
+            
+
 
         def statusHandler(self):
             self.send_response(200)
