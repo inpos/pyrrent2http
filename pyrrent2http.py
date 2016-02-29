@@ -10,7 +10,7 @@ except:
         sys.path.append(os.path.dirname(os.path.realpath(__file__)))
         import libtorrent as lt
     except Exception as e:
-        _, strerror = ee.args
+        _, strerror = e.args
         logging.error(strerror)
         sys.exit(1)
 from random import SystemRandom
