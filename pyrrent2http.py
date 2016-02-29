@@ -23,10 +23,12 @@ import SocketServer
 import threading
 import signal
 import io
+import socket
 
 logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
 ######################################################################################
-VERSION = "0.2.0"
+AVOID_HTTP_SERVER_EXCEPTION_OUTPUT = True
+VERSION = "0.3.0"
 USER_AGENT = "pyrrent2http/" + VERSION + " libtorrent/" + lt.version
 ######################################################################################
 
@@ -65,7 +67,7 @@ class Ticker(object):
 class TorrentFile(object):
     tfs         =   None
     num         =   int()
-    closed      =   False
+    closed      =   True
     savePath    =   str()
     fileEntry   =   None
     index       =   int()
@@ -89,6 +91,7 @@ class TorrentFile(object):
         if self.closed:
             return None
         if self.filePtr is None:
+            #print('savePath: %s' % (self.savePath,))
             while not os.path.exists(self.savePath):
                 time.sleep(0.1)
             self.filePtr = io.open(self.savePath, 'rb')
@@ -123,12 +126,12 @@ class TorrentFile(object):
             self.tfs.handle.set_piece_deadline(piece, 50)
         while not self.havePiece(piece):
             if self.tfs.handle.piece_priority(piece) == 0 or self.closed:
-                return None
+                return False
             time.sleep(0.1)
         _, endPiece = self.Pieces()
         if piece < endPiece and not self.havePiece(piece + 1):
             self.tfs.handle.set_piece_deadline(piece + 1, 100)
-        return None
+        return True
     def Close(self):
         if self.closed: return
         self.log('Closing %s...' % (self.Name(),))
@@ -136,6 +139,7 @@ class TorrentFile(object):
         self.closed = True
         if self.filePtr is not None:
             self.filePtr.close()
+            self.filePtr = None
     def ShowPieces(self):
         pieces = self.tfs.handle.status().pieces
         startPiece, endPiece = self.Pieces()
@@ -149,7 +153,7 @@ class TorrentFile(object):
     def Read(self, buf):
         filePtr = self.FilePtr()
         if filePtr is None:
-            return 0
+            return None
         toRead = len(buf)
         if toRead > self.pieceLength():
             toRead = self.pieceLength()
@@ -157,7 +161,7 @@ class TorrentFile(object):
         startPiece, _ = self.pieceFromOffset(readOffset)
         endPiece, _ = self.pieceFromOffset(readOffset + toRead)
         for i in range(startPiece,  endPiece + 1):
-            if self.waitForPiece(i) is None:
+            if not self.waitForPiece(i):
                 return 0
         read = filePtr.readinto(buf)
         return read
@@ -231,8 +235,8 @@ class TorrentFS(object):
                 f.Close()
     def LastOpenedFile(self):
         return self.LastOpenedFile  
-    def addOpenedFile(self, file):
-        self.openedFiles.append(file)    
+    def addOpenedFile(self, file_):
+        self.openedFiles.append(file_)    
     def setPriority(self, index, priority):
         if self.priorities[index] != priority:
             logging.info('Setting %s priority to %d', self.info.file_at(0).path, priority)
@@ -269,11 +273,11 @@ class TorrentFS(object):
         info = self.TorrentInfo()
         files = [None for x in range(info.num_files())]
         for i in range(info.num_files()):
-            file = self.FileAt(i)
-            file.downloaded = self.getFileDownloadedBytes(i)
-            if file.Size() > 0:
-                file.progress = float(file.downloaded)/float(file.Size())
-            files[i] = file
+            file_ = self.FileAt(i)
+            file_.downloaded = self.getFileDownloadedBytes(i)
+            if file_.Size() > 0:
+                file_.progress = float(file_.downloaded)/float(file_.Size())
+            files[i] = file_
         return files
     def SavePath(self):
         return self.root.torrentParams['save_path']
@@ -291,9 +295,9 @@ class TorrentFS(object):
                            )
     def FileByName(self, name):
         savePath = os.path.abspath(os.path.join(self.SavePath(), name))
-        for file in self.Files():
-            if file.SavePath() == savePath:
-                return file
+        for file_ in self.Files():
+            if file_.SavePath() == savePath:
+                return file_
         raise IOError
     def Open(self, name):
         if self.shuttingDown or not self.HasTorrentInfo():
@@ -314,9 +318,10 @@ class TorrentFS(object):
                 self.setPriority(index, 0)
     def OpenFile(self, name):
         try:
-            tf = FileByName(name)
+            tf = self.FileByName(name)
         except IOError:
             return
+        tf.closed = False
         self.fileCounter += 1
         tf.num = self.fileCounter
         tf.log('Opening %s...' % (tf.Name(),))
@@ -345,11 +350,16 @@ class BoolArg(argparse.Action):
         setattr(namespace, self.dest, v)
         
 class ThreadingHTTPServer(SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer):
-    pass
+    def handle_error(self, *args, **kwargs):
+        '''Обходим злосчастный "Broken Pipe" и прочие трейсы'''
+        if not AVOID_HTTP_SERVER_EXCEPTION_OUTPUT:
+            super(ThreadingHTTPServer, self).handle_error(*args, **kwargs)
 
 def HttpHandlerFactory():
     class HttpHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         def do_GET(self):
+            #print ('---Headers---\n%s\n' % (self.headers,))
+            #print ('---Request---\n%s\n' % (self.path,))
             if self.path == '/status':
                 self.statusHandler()
             elif self.path == '/ls':
@@ -358,23 +368,27 @@ def HttpHandlerFactory():
                 self.peersHandler()
             elif self.path == '/trackers':
                 self.trackersHandler()
-            #elif self.path.startwith('/get/'):   # Неясно, зачем 
+            #elif self.path.startswith('/get/'):   # Неясно, зачем 
             #    self.getHandler()                # этот запрос?
             elif self.path == '/shutdown':
                 self.server.root_obj.forceShutdown = True
+                self.server.server_close()
                 self.end_headers()
                 self.wfile.write('OK')
-            elif self.path.startwith('/files/'):
+            elif self.path.startswith('/files/'):
                 self.filesHandler()
             else:
                 self.send_error(404, 'Not found')
                 self.end_headers()
         def filesHandler(self):
+            #print('+++++start handle file+++++')
             f, start_range, end_range = self.send_head()
+            #print('%s | %d | %d' % (repr(f), repr(start_range), repr(end_range)))
             #print "Got values of ", start_range, " and ", end_range, "...\n"
             if not f.closed:
+                #print('Reading file!!!!!!')
                 f.Seek(start_range, 0)
-                chunk = 1024 * 1024
+                chunk = f.pieceLength()
                 total = 0
                 buf = bytearray(chunk)
                 while chunk > 0:
@@ -392,8 +406,8 @@ def HttpHandlerFactory():
         def send_head(self):
             fname = urllib.unquote(self.path.lstrip('/files/'))
             try:
-                f =  self.server.root_obj.TorrentFS.FileByName(fname)
-                _ = f.FilePtr()
+                f =  self.server.root_obj.TorrentFS.Open(fname)
+                #print('++++file opening++++')
             except IOError:
                 self.send_error(404, "File not found")
                 return (None, 0, 0)
@@ -432,19 +446,19 @@ def HttpHandlerFactory():
             torrentHandle = self.server.root_obj.torrentHandle
             tstatus = torrentHandle.status()
             status = {
-                         'Name'           :   torrentHandle.name(),
-                         'State'          :   int(tstatus.state),
-                         'StateStr'       :   str(tstatus.state),
-                         'Error'          :   tstatus.error,
-                         'Progress'       :   tstatus.progress,
-                         'DownloadRate'   :   tstatus.download_rate,
-                         'UploadRate'     :   tstatus.upload_rate,
-                         'TotalDownload'  :   tstatus.total_download,
-                         'TotalUpload'    :   tstatus.total_upload,
-                         'NumPeers'       :   tstatus.num_peers,
-                         'NumSeeds'       :   tstatus.num_seeds,
-                         'TotalSeeds'     :   tstatus.num_complete,
-                         'TotalPeers'     :   tstatus.num_incomplete
+                         'name'           :   torrentHandle.name(),
+                         'state'          :   int(tstatus.state),
+                         'state_str'       :   str(tstatus.state),
+                         'error'          :   tstatus.error,
+                         'progress'       :   tstatus.progress,
+                         'download_rate'   :   tstatus.download_rate / 1024,
+                         'upload_rate'     :   tstatus.upload_rate / 1024,
+                         'total_download'  :   tstatus.total_download,
+                         'total_upload'    :   tstatus.total_upload,
+                         'num_peers'       :   tstatus.num_peers,
+                         'num_seeds'       :   tstatus.num_seeds,
+                         'total_seeds'     :   tstatus.num_complete,
+                         'total_peers'     :   tstatus.num_incomplete
                          }
             output = json.dumps(status)
             self.wfile.write(output)
@@ -452,21 +466,21 @@ def HttpHandlerFactory():
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()
-            retFiles = list()
+            retFiles = {'files': []}
             if self.server.root_obj.TorrentFS.HasTorrentInfo():
                 files = self.server.root_obj.TorrentFS.Files()
                 for file_ in files:
                     Url = 'http://' + self.server.root_obj.config.bindAddress + '/files/' + urllib.quote(file_.Name())
                     fi = {
-                          'Name':       file_.Name(),
-                          'Size':       file_.Size(),
-                          'Offset':     file_.Offset(),
-                          'Download':   file_.Downloaded(),
-                          'Progress':   file_.Progress(),
-                          'SavePath':   file_.SavePath(),
-                          'Url':        Url
+                          'name':       file_.Name(),
+                          'size':       file_.Size(),
+                          'offset':     file_.Offset(),
+                          'download':   file_.Downloaded(),
+                          'progress':   file_.Progress(),
+                          'save_path':   file_.SavePath(),
+                          'url':        Url
                           }
-                    retFiles.append(fi)
+                    retFiles['files'].append(fi)
             output = json.dumps(retFiles)
             self.wfile.write(output)
         def peersHandler(self):
