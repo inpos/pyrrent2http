@@ -10,7 +10,7 @@ except:
         sys.path.append(os.path.dirname(os.path.realpath(__file__)))
         import libtorrent as lt
     except Exception as e:
-        _, strerror = e.args
+        strerror = e.args
         logging.error(strerror)
         sys.exit(1)
 from random import SystemRandom
@@ -593,7 +593,7 @@ class Pyrrent2http(object):
                 with open(absPath, 'rb') as f:
                     torrent_info = lt.torrent_info(lt.bdecode(f.read()))
             except Exception as e:
-                errno, strerror = e.args
+                strerror = e.args
                 logging.error(strerror)
                 sys.exit(errno)
             torrentParams['ti'] = torrent_info
@@ -603,7 +603,7 @@ class Pyrrent2http(object):
                 torrent_raw = urllib.urlopen(uri).read()
                 torrent_info = lt.torrent_info(torrent_raw, len(torrent_raw))
             except Exception as e:
-                errno, strerror = e.args
+                strerror = e.args
                 logging.error(strerror)
                 sys.exit(errno)
             torrentParams['ti'] = torrent_info
@@ -616,7 +616,7 @@ class Pyrrent2http(object):
                 with open(self.config.resumeFile, 'rb') as f:
                     torrentParams['resume_data'] = lt.bencode(f.read())
             except Exception as e:
-                _, strerror = e.args
+                strerror = e.args
                 logging.error(strerror)
         if self.config.noSparseFile or self.magnet:
             logging.info('Disabling sparse file support...')
@@ -701,7 +701,7 @@ class Pyrrent2http(object):
                 with open(self.config.stateFile, 'rb') as f:
                     bytes__ = f.read()
             except IOError as e:
-                _, strerror = e.args
+                strerror = e.args
                 logging.error(strerror)
             else:
                 self.session.load_state(lt.bdecode(bytes__))
@@ -714,7 +714,7 @@ class Pyrrent2http(object):
         try:
             self.session.listen_on(portLower, portUpper)
         except IOError as e:
-            errno, strerror = e.args
+            strerror = e.args
             logging.error(strerror)
             sys.exit(errno)
         
@@ -743,7 +743,7 @@ class Pyrrent2http(object):
                     try:
                         port = len(hostPort) > 1 and int(hostPort[1].strip()) or 6881
                     except ValueError as e:
-                        errno, strerror = e.args
+                        strerror = e.args
                         logging.error(strerror)
                         sys.exit(errno)
                     self.session.add_dht_router(host, port)
@@ -830,7 +830,7 @@ class Pyrrent2http(object):
             with open(self.config.resumeFile, 'wb') as f:
                 f.write(data)
         except IOError as e:
-            _, strerror = e.args
+            strerror = e.args
             logging.error(strerror)
     def saveResumeData(self, async = False):
         if not self.torrentHandle.status().need_save_resume or self.config.resumeFile == '':
@@ -852,14 +852,14 @@ class Pyrrent2http(object):
             with open(self.config.stateFile, 'wb') as f:
                 f.write(data)
         except IOError as e:
-            _, strerror = e.args
+            strerror = e.args
             logging.error(strerror)
     def removeFiles(self, files):
         for file in files:
             try:
                 os.remove(file)
             except Exception as e:
-                _, strerror = e.args
+                strerror = e.args
                 logging.error(strerror)
             else:
                 path = os.path.dirname(file)
