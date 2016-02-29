@@ -30,6 +30,10 @@ logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
 AVOID_HTTP_SERVER_EXCEPTION_OUTPUT = True
 VERSION = "0.3.0"
 USER_AGENT = "pyrrent2http/" + VERSION + " libtorrent/" + lt.version
+
+VIDEO_EXTS={'.avi':'video/x-msvideo','.mp4':'video/mp4','.mkv':'video/x-matroska',
+'.m4v':'video/mp4','.mov':'video/quicktime', '.mpg':'video/mpeg','.ogv':'video/ogg',
+'.ogg':'video/ogg', '.webm':'video/webm', '.ts': 'video/mp2t', '.3gp':'video/3gpp'}
 ######################################################################################
 
 class Ticker(object):
@@ -239,7 +243,7 @@ class TorrentFS(object):
         self.openedFiles.append(file_)    
     def setPriority(self, index, priority):
         if self.priorities[index] != priority:
-            logging.info('Setting %s priority to %d', self.info.file_at(0).path, priority)
+            logging.info('Setting %s priority to %d', self.info.file_at(index).path, priority)
             self.priorities[index] = priority
             self.handle.file_priority(index, priority)
     def findOpenedFile(self, file):
@@ -411,12 +415,14 @@ def HttpHandlerFactory():
             except IOError:
                 self.send_error(404, "File not found")
                 return (None, 0, 0)
-            ctype = 'application/octet-stream'
+            _, ext = os.path.splitext(fname)
+            ctype = ext != '' and VIDEO_EXTS[ext] or 'application/octet-stream'
             if "Range" in self.headers:
-                self.send_response(206)
+                self.send_response(206, 'Partial Content')
             else:
                 self.send_response(200)
             self.send_header("Content-type", ctype)
+            self.send_header('transferMode.dlna.org', 'Streaming')
             size = f.Size()
             start_range = 0
             end_range = size
