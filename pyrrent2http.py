@@ -641,6 +641,7 @@ class Pyrrent2http(object):
         self.torrentParams = self.buildTorrentParams(self.config.uri)
         logging.info('Adding torrent')
         self.torrentHandle = self.session.add_torrent(self.torrentParams)
+        self.torrentHandle.set_sequential_download(True)
         if self.config.trackers != '':
             trackers    = self.config.trackers.split(',')
             startTier   = 256 - len(trackers)
