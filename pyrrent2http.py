@@ -25,10 +25,11 @@ import signal
 import io
 import socket
 
-logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
+#logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
+
 ######################################################################################
 AVOID_HTTP_SERVER_EXCEPTION_OUTPUT = True
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 USER_AGENT = "pyrrent2http/" + VERSION + " libtorrent/" + lt.version
 
 VIDEO_EXTS={'.avi':'video/x-msvideo','.mp4':'video/mp4','.mkv':'video/x-matroska',
@@ -83,6 +84,10 @@ class TorrentFile(object):
         self.fileEntry = fileEntry
         self.savePath = savePath
         self.index = index
+        self.piece_length = int(self.pieceLength())
+        self.startPiece, self.endPiece = self.Pieces()
+        self.offset = self.Offset()
+        self.size = self.Size()
     def SavePath(self):
         return self.savePath
     def Index(self):
@@ -118,9 +123,9 @@ class TorrentFile(object):
     def pieceLength(self):
         return self.tfs.info.piece_length()
     def pieceFromOffset(self, offset):
-        pieceLength = int(self.pieceLength())
-        piece = int((self.Offset() + offset) / pieceLength)
-        pieceOffset = int((self.Offset() + offset) % pieceLength)
+        #pieceLength = self.piece_length
+        piece = int((self.Offset() + offset) / self.piece_length)
+        pieceOffset = int((self.Offset() + offset) % self.piece_length)
         return piece, pieceOffset
     def Offset(self):
         return self.fileEntry.offset
@@ -132,8 +137,8 @@ class TorrentFile(object):
             if self.tfs.handle.piece_priority(piece) == 0 or self.closed:
                 return False
             time.sleep(0.1)
-        _, endPiece = self.Pieces()
-        if piece < endPiece and not self.havePiece(piece + 1):
+        #_, endPiece = self.Pieces()
+        if piece < self.endPiece and not self.havePiece(piece + 1):
             self.tfs.handle.set_piece_deadline(piece + 1, 100)
         return True
     def Close(self):
@@ -146,9 +151,8 @@ class TorrentFile(object):
             self.filePtr = None
     def ShowPieces(self):
         pieces = self.tfs.handle.status().pieces
-        startPiece, endPiece = self.Pieces()
         str_ = ''
-        for i in range(startPiece, endPiece + 1):
+        for i in range(self.startPiece, self.endPiece + 1):
             if pieces[i] == False:
                 str_ += "-"
             else:
@@ -159,8 +163,8 @@ class TorrentFile(object):
         if filePtr is None:
             raise IOError
         toRead = len(buf)
-        if toRead > self.pieceLength():
-            toRead = self.pieceLength()
+        if toRead > self.piece_length:
+            toRead = self.piece_length
         readOffset = self.readOffset()
         startPiece, _ = self.pieceFromOffset(readOffset)
         endPiece, _ = self.pieceFromOffset(readOffset + toRead)
@@ -173,18 +177,18 @@ class TorrentFile(object):
         filePtr = self.FilePtr()
         if filePtr is None: return
         if whence == os.SEEK_END:
-            offset = self.Size() - offset
+            #offset = self.Size() - offset
+            offset = self.size - offset
             whence = os.SEEK_SET
         newOffset = filePtr.seek(offset, whence)
-        self.log('Seeking to %d/%d' % (newOffset, self.Size()))
+        self.log('Seeking to %d/%d' % (newOffset, self.size))
         return newOffset
     def Name(self):
         return self.fileEntry.path
     def Size(self):
         return self.fileEntry.size
     def IsComplete(self):
-        return self.downloaded == self.Size()
-
+        return self.downloaded == self.size
 #######################################################################################
 
 class TorrentDir(object):
@@ -393,7 +397,7 @@ def HttpHandlerFactory():
             if not f.closed:
                 #print('Reading file!!!!!!')
                 f.Seek(start_range, 0)
-                chunk = f.pieceLength()
+                chunk = f.piece_length
                 total = 0
                 buf = bytearray(chunk)
                 while chunk > 0:
@@ -424,7 +428,7 @@ def HttpHandlerFactory():
                 self.send_response(200)
             self.send_header("Content-type", ctype)
             self.send_header('transferMode.dlna.org', 'Streaming')
-            size = f.Size()
+            size = f.size
             start_range = 0
             end_range = size
             self.send_header("Accept-Ranges", "bytes")
@@ -480,8 +484,8 @@ def HttpHandlerFactory():
                     Url = 'http://' + self.server.root_obj.config.bindAddress + '/files/' + urllib.quote(file_.Name())
                     fi = {
                           'name':       file_.Name(),
-                          'size':       file_.Size(),
-                          'offset':     file_.Offset(),
+                          'size':       file_.size,
+                          'offset':     file_.offset,
                           'download':   file_.Downloaded(),
                           'progress':   file_.Progress(),
                           'save_path':   file_.SavePath(),
