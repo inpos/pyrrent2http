@@ -28,7 +28,7 @@ import socket
 logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
 ######################################################################################
 AVOID_HTTP_SERVER_EXCEPTION_OUTPUT = True
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 USER_AGENT = "pyrrent2http/" + VERSION + " libtorrent/" + lt.version
 
 VIDEO_EXTS={'.avi':'video/x-msvideo','.mp4':'video/mp4','.mkv':'video/x-matroska',
@@ -112,7 +112,7 @@ class TorrentFile(object):
     def Stat(self):
         return self
     def readOffset(self):
-        return self.filePtr.seek(0, os.SEEK_CUR)
+        return self.filePtr.seek(0, io.SEEK_CUR)
     def havePiece(self, piece):
         return self.tfs.handle.have_piece(piece)
     def pieceLength(self):
@@ -157,7 +157,7 @@ class TorrentFile(object):
     def Read(self, buf):
         filePtr = self.FilePtr()
         if filePtr is None:
-            return None
+            raise IOError
         toRead = len(buf)
         if toRead > self.pieceLength():
             toRead = self.pieceLength()
@@ -166,7 +166,7 @@ class TorrentFile(object):
         endPiece, _ = self.pieceFromOffset(readOffset + toRead)
         for i in range(startPiece,  endPiece + 1):
             if not self.waitForPiece(i):
-                return 0
+                raise IOError
         read = filePtr.readinto(buf)
         return read
     def Seek(self, offset, whence):
@@ -238,7 +238,7 @@ class TorrentFS(object):
             for f in self.openedFiles:
                 f.Close()
     def LastOpenedFile(self):
-        return self.LastOpenedFile  
+        return self.lastOpenedFile  
     def addOpenedFile(self, file_):
         self.openedFiles.append(file_)    
     def setPriority(self, index, priority):
@@ -357,7 +357,7 @@ class ThreadingHTTPServer(SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer
     def handle_error(self, *args, **kwargs):
         '''Обходим злосчастный "Broken Pipe" и прочие трейсы'''
         if not AVOID_HTTP_SERVER_EXCEPTION_OUTPUT:
-            super(ThreadingHTTPServer, self).handle_error(*args, **kwargs)
+            BaseHTTPServer.HTTPServer.handle_error(self, *args, **kwargs)
 
 def HttpHandlerFactory():
     class HttpHandler(BaseHTTPServer.BaseHTTPRequestHandler):
@@ -372,7 +372,8 @@ def HttpHandlerFactory():
                 self.peersHandler()
             elif self.path == '/trackers':
                 self.trackersHandler()
-            #elif self.path.startswith('/get/'):   # Неясно, зачем 
+            elif self.path.startswith('/get/'):   # Неясно, зачем
+                return 
             #    self.getHandler()                # этот запрос?
             elif self.path == '/shutdown':
                 self.server.root_obj.forceShutdown = True
@@ -615,7 +616,7 @@ class Pyrrent2http(object):
             except Exception as e:
                 strerror = e.args
                 logging.error(strerror)
-                sys.exit(errno)
+                sys.exit(1)
             torrentParams['ti'] = torrent_info
         else:
             logging.info('Will fetch: %s', uri)
@@ -625,7 +626,7 @@ class Pyrrent2http(object):
             except Exception as e:
                 strerror = e.args
                 logging.error(strerror)
-                sys.exit(errno)
+                sys.exit(1)
             torrentParams['ti'] = torrent_info
         logging.info('Setting save path: %s', self.config.downloadPath)
         torrentParams['save_path'] = self.config.downloadPath
@@ -647,7 +648,11 @@ class Pyrrent2http(object):
         self.torrentParams = self.buildTorrentParams(self.config.uri)
         logging.info('Adding torrent')
         self.torrentHandle = self.session.add_torrent(self.torrentParams)
-        self.torrentHandle.set_sequential_download(True)
+        #self.torrentHandle.set_sequential_download(True)
+        #
+        # Хороший флаг, но не в нашем случае. Мы сам указываем, какие куски нам нужны (handle.set_piece_deadline)
+        # Также, у нас перемотка. Т.е. произвольный доступ.
+        # Значит, последовательная загрузка нам будет только вредить
         if self.config.trackers != '':
             trackers    = self.config.trackers.split(',')
             startTier   = 256 - len(trackers)
@@ -745,7 +750,7 @@ class Pyrrent2http(object):
         except IOError as e:
             strerror = e.args
             logging.error(strerror)
-            sys.exit(errno)
+            sys.exit(1)
         
         settings = self.session.settings()
         if self.config.userAgent != '':
@@ -774,7 +779,7 @@ class Pyrrent2http(object):
                     except ValueError as e:
                         strerror = e.args
                         logging.error(strerror)
-                        sys.exit(errno)
+                        sys.exit(1)
                     self.session.add_dht_router(host, port)
                     logging.info('Added DHT router: %s:%d', host, port)
         logging.info('Setting encryption settings')
@@ -800,14 +805,14 @@ class Pyrrent2http(object):
             errorStr = ''
             if len(status.error) > 0:
                 errorStr = ' (%s)' % (status.error,)
-            logging.info('%s, overall progress: %.2f%%, dl/ul: %.3f/%.3f kbps, peers/seeds: %d/%d' + dhtStatusStr + errorStr % (
+            logging.info('%s, overall progress: %.2f%%, dl/ul: %.3f/%.3f kbps, peers/seeds: %d/%d'  % (
                           str(status.state),
-                          status.progres * 100,
+                          status.progress * 100,
                           float(status.download_rate)/1024,
                           float(status.upload_rate)/1024,
                           status.num_peers,
                           status.num_seeds
-                          )
+                          ) + dhtStatusStr + errorStr
                          )
             if self.config.showFilesProgress or self.config.showAllStats:
                 str_ = 'Files: '
@@ -816,6 +821,7 @@ class Pyrrent2http(object):
                 logging.info(str_)
             if (self.config.showPiecesProgress or self.config.showAllStats) and self.TorrentFS.LastOpenedFile() != None:
                 self.TorrentFS.LastOpenedFile().ShowPieces()
+
     def consumeAlerts(self):
         alerts = self.session.pop_alerts()
         for alert in alerts:
