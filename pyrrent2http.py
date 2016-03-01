@@ -79,6 +79,7 @@ class TorrentFile(object):
     filePtr     =   None
     downloaded  =   int()
     progress    =   float()
+    pdl_thread  =   None
     def __init__(self, tfs, fileEntry, savePath, index):
         self.tfs = tfs
         self.fileEntry = fileEntry
@@ -86,6 +87,7 @@ class TorrentFile(object):
         self.index = index
         self.piece_length = int(self.pieceLength())
         self.startPiece, self.endPiece = self.Pieces()
+        self.pieces_deadlined = [False for x in range(self.endPiece - self.startPiece)]
         self.offset = self.Offset()
         self.size = self.Size()
     def SavePath(self):
@@ -130,6 +132,14 @@ class TorrentFile(object):
     def Offset(self):
         return self.fileEntry.offset
     def waitForPiece(self, piece):
+        def set_deadlines(p):
+            next_piece = p + 1
+            BUF_SIZE = 20   # количество блоковв буфере
+            for i in range(BUF_SIZE):
+                if (next_piece + i < self.endPiece and 
+                    not self.pieces_deadlined[(next_piece + i)- self.startPiece] and not self.havePiece(next_piece + i)):
+                    self.tfs.handle.set_piece_deadline(next_piece + i, 70 + (20 * i))
+                    self.pieces_deadlined[next_piece + i] = True
         if not self.havePiece(piece):
             self.log('Waiting for piece %d' % (piece,))
             self.tfs.handle.set_piece_deadline(piece, 50)
@@ -137,9 +147,9 @@ class TorrentFile(object):
             if self.tfs.handle.piece_priority(piece) == 0 or self.closed:
                 return False
             time.sleep(0.1)
-        #_, endPiece = self.Pieces()
-        if piece < self.endPiece and not self.havePiece(piece + 1):
-            self.tfs.handle.set_piece_deadline(piece + 1, 100)
+        if not isinstance(self.pdl_thread, threading.Thread) or not self.pdl_thread.is_alive():
+            self.pdl_thread = threading.Thread(target = set_deadlines, args = (piece,))
+            self.pdl_thread.start()
         return True
     def Close(self):
         if self.closed: return
