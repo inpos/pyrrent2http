@@ -956,7 +956,7 @@ class Pyrrent2http(object):
                 self.saveResumeData(True)
 
     def processSaveResumeDataAlert(self, alert):
-        logging.info('Saving resume data to: %s', config.resumeFile)
+        logging.info('Saving resume data to: %s', self.config.resumeFile)
         data = lt.bencode(alert.resume_data)
         try:
             with open(self.config.resumeFile, 'wb') as f:
