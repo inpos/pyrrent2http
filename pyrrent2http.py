@@ -603,7 +603,10 @@ class Pyrrent2http(object):
         parser.add_argument('--enable-natpmp', nargs='?', action=BoolArg, default=True, help='Enable NATPMP (NAT port-mapping)', dest='enableNATPMP', choices=('true', 'false'))
         parser.add_argument('--enable-utp', nargs='?', action=BoolArg, default=True, help='Enable uTP protocol', dest='enableUTP', choices=('true', 'false'))
         parser.add_argument('--enable-tcp', nargs='?', action=BoolArg, default=True, help='Enable TCP protocol', dest='enableTCP', choices=('true', 'false'))
-        self.config = parser.parse_args()
+        config_ = parser.parse_args()
+        self.config = AttributeDict()
+        for k in config_.keys():
+            self.config[k] = config_[k]
         if self.config.uri == '':
             parser.print_usage()
             sys.exit(1)
