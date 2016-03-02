@@ -495,7 +495,7 @@ def HttpHandlerFactory():
                 self.send_error(404, "File not found")
                 return (None, 0, 0)
             _, ext = os.path.splitext(fname)
-            ctype = ext != '' and VIDEO_EXTS[ext] or 'application/octet-stream'
+            ctype = (ext != '' and ext in VIDEO_EXTS.keys())and VIDEO_EXTS[ext] or 'application/octet-stream'
             if "Range" in self.headers:
                 self.send_response(206, 'Partial Content')
             else:
