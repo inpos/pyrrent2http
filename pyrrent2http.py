@@ -606,7 +606,7 @@ class Pyrrent2http(object):
         config_ = parser.parse_args()
         self.config = AttributeDict()
         for k in config_.keys():
-            self.config[k] = config_[k]
+            self.config[k] = config_.__dict__[k]
         if self.config.uri == '':
             parser.print_usage()
             sys.exit(1)
