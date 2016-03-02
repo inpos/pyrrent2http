@@ -529,9 +529,14 @@ def HttpHandlerFactory():
             self.send_header("Content-type", "application/json")
             self.end_headers()
             torrentHandle = self.server.root_obj.torrentHandle
+            try:
+                info = torrentHandle.torrent_file()
+            except:
+                info = torrentHandle.get_torrent_info()
+            
             tstatus = torrentHandle.status()
             status = {
-                         'name'           :   torrentHandle.name(),
+                         'name'           :   info.name(),
                          'state'          :   int(tstatus.state),
                          'state_str'       :   str(tstatus.state),
                          'error'          :   tstatus.error,
