@@ -26,7 +26,7 @@ import io
 import socket
 
 
-#logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
+logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
 
 ######################################################################################
 AVOID_HTTP_SERVER_EXCEPTION_OUTPUT = True
@@ -681,6 +681,10 @@ class Pyrrent2http(object):
         if self.config.enableScrape:
             logging.info('Sending scrape request to tracker')
             self.torrentHandle.scrape_tracker()
+        try:
+            info = self.torrentHandle.torrent_file()
+        except:
+            info = self.torrentHandle.get_torrent_info()
         logging.info('Downloading torrent: %s', self.torrentHandle.get_torrent_info().name())
         self.TorrentFS = TorrentFS(self, self.torrentHandle, self.config.fileIndex)
     
