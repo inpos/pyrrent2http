@@ -606,7 +606,7 @@ class Pyrrent2http(object):
         parser.add_argument('--enable-tcp', nargs='?', action=BoolArg, default=True, help='Enable TCP protocol', dest='enableTCP', choices=('true', 'false'))
         config_ = parser.parse_args()
         self.config = AttributeDict()
-        for k in config_.keys():
+        for k in config_.__dict__.keys():
             self.config[k] = config_.__dict__[k]
         if self.config.uri == '':
             parser.print_usage()
