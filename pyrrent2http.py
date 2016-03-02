@@ -696,7 +696,7 @@ class Pyrrent2http(object):
             torrentParams['url'] =  uri
         elif fileUri.scheme == 'file':
             uriPath = fileUri.path
-            if uriPath != '' and platform.system().lower() == 'windows' and os.path.sep == uriPath[0]:
+            if uriPath != '' and platform.system().lower() == 'windows' and (os.path.sep == uriPath[0] or uriPath[0] == '/'):
                 uriPath = uriPath[1:]
             try:
                 absPath = os.path.abspath(uriPath)
