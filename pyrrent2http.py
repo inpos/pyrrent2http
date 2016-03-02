@@ -727,20 +727,20 @@ class Pyrrent2http(object):
             alertMask |= lt.alert.category_t.debug_notification
         self.session.set_alert_mask(alertMask)
         
-        settings = self.session.settings()
-        settings.request_timeout = self.config.requestTimeout
-        settings.peer_connect_timeout = self.config.peerConnectTimeout
-        settings.announce_to_all_trackers = True
-        settings.announce_to_all_tiers = True
-        settings.torrent_connect_boost = self.config.torrentConnectBoost
-        settings.connection_speed = self.config.connectionSpeed
-        settings.min_reconnect_time = self.config.minReconnectTime
-        settings.max_failcount = self.config.maxFailCount
-        settings.recv_socket_buffer_size = 1024 * 1024
-        settings.send_socket_buffer_size = 1024 * 1024
-        settings.rate_limit_ip_overhead = True
-        settings.min_announce_interval = 60
-        settings.tracker_backoff = 0
+        settings = self.session.get_settings()
+        settings["request_timeout"] = self.config.requestTimeout
+        settings["peer_connect_timeout"] = self.config.peerConnectTimeout
+        settings["announce_to_all_trackers"] = True
+        settings["announce_to_all_tiers"] = True
+        settings["torrent_connect_boost"] = self.config.torrentConnectBoost
+        settings["connection_speed"] = self.config.connectionSpeed
+        settings["min_reconnect_time"] = self.config.minReconnectTime
+        settings["max_failcount"] = self.config.maxFailCount
+        settings["recv_socket_buffer_size"] = 1024 * 1024
+        settings["send_socket_buffer_size"] = 1024 * 1024
+        settings["rate_limit_ip_overhead"] = True
+        settings["min_announce_interval"] = 60
+        settings["tracker_backoff"] = 0
         self.session.set_settings(settings)
     
         if self.config.stateFile != '':
