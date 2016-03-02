@@ -770,19 +770,19 @@ class Pyrrent2http(object):
             logging.error(strerror)
             sys.exit(1)
         
-        settings = self.session.settings()
+        settings = self.session.get_settings()
         if self.config.userAgent != '':
-            settings.user_agent = self.config.userAgent
+            settings['user_agent'] = self.config.userAgent
         if self.config.connectionsLimit >= 0:
-            settings.connections_limit = self.config.connectionsLimit
+            settings['connections_limit'] = self.config.connectionsLimit
         if self.config.maxDownloadRate >= 0:
-            settings.download_rate_limit = self.config.maxDownloadRate * 1024
+            settings['download_rate_limit'] = self.config.maxDownloadRate * 1024
         if self.config.maxUploadRate >= 0:
-            settings.upload_rate_limit = self.config.maxUploadRate * 1024
-        settings.enable_incoming_tcp = self.config.enableTCP
-        settings.enable_outgoing_tcp = self.config.enableTCP
-        settings.enable_incoming_utp = self.config.enableUTP
-        settings.enable_outgoing_utp = self.config.enableUTP
+            settings['upload_rate_limit'] = self.config.maxUploadRate * 1024
+        settings['enable_incoming_tcp'] = self.config.enableTCP
+        settings['enable_outgoing_tcp'] = self.config.enableTCP
+        settings['enable_incoming_utp'] = self.config.enableUTP
+        settings['enable_outgoing_utp'] = self.config.enableUTP
         self.session.set_settings(settings)
         
         if self.config.dhtRouters != '':
