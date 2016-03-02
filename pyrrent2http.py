@@ -273,7 +273,10 @@ class TorrentFS(object):
     def waitForMetadata(self):
         if not self.handle.status().has_metadata:
             time.sleep(0.1)
-        self.info = self.handle.get_torrent_info()
+        try:
+            self.info = self.handle.torrent_file()
+        except:
+            self.info = self.handle.get_torrent_info()
     def HasTorrentInfo(self):
         return self.info is not None
     def TorrentInfo(self):
@@ -533,7 +536,11 @@ def HttpHandlerFactory():
             self.send_header("Content-type", "application/json")
             self.end_headers()
             ret = list()
-            for tracker in self.server.root_obj.torrentHandler.get_torrent_info().trackers():
+            try:
+                self.info = self.server.root_obj.torrentHandler.torrent_file()
+            except:
+                self.info = self.server.root_obj.torrentHandler.get_torrent_info()
+            for tracker in info.trackers():
                 pi = {
                         'Url':                tracker.url,
                         'NextAnnounceIn':        self.server.root_obj.torrentHandler.status().next_announce.seconds,
@@ -685,7 +692,7 @@ class Pyrrent2http(object):
             info = self.torrentHandle.torrent_file()
         except:
             info = self.torrentHandle.get_torrent_info()
-        logging.info('Downloading torrent: %s', self.torrentHandle.get_torrent_info().name())
+        logging.info('Downloading torrent: %s', info.name())
         self.TorrentFS = TorrentFS(self, self.torrentHandle, self.config.fileIndex)
     
     def startHTTP(self):
